@@ -26,12 +26,24 @@ impl ZipFormerStream {
             encoder: encoder_ptr.as_ptr(),
             joiner: joiner_ptr.as_ptr(),
         };
+        let paraformer = unsafe {
+            sherpa_rs_sys::SherpaOnnxOnlineParaformerModelConfig {
+                encoder: mem::zeroed::<_>(),
+                decoder: mem::zeroed::<_>(),
+            }
+        };
+        let ctc = unsafe {
+            sherpa_rs_sys::SherpaOnnxOnlineZipformer2CtcModelConfig {
+                model: mem::zeroed::<_>(),
+            }
+        };
+
         // Offline model config
         let model_config = unsafe {
             sherpa_rs_sys::SherpaOnnxOnlineModelConfig {
                 transducer: transcuder_config,
-                paraformer: mem::zeroed::<_>(),
-                zipformer2_ctc: mem::zeroed::<_>(),
+                paraformer: paraformer,
+                zipformer2_ctc: ctc,
                 tokens: tokens_ptr.as_ptr(),
                 num_threads: config.num_threads.unwrap_or(1),
                 provider: provider_ptr.as_ptr(),
@@ -43,27 +55,47 @@ impl ZipFormerStream {
                 tokens_buf_size: 0,
             }
         };
+
+        let feat_config = sherpa_rs_sys::SherpaOnnxFeatureConfig {
+                sample_rate: 16000,
+                feature_dim: 80,
+            };
+
+        let ctc_decode = unsafe { 
+            sherpa_rs_sys::SherpaOnnxOnlineCtcFstDecoderConfig {
+                graph: mem::zeroed::<_>(),
+                max_active:3000,
+            }
+        };
+
+        let hr = unsafe {
+            sherpa_rs_sys::SherpaOnnxHomophoneReplacerConfig {
+                dict_dir: mem::zeroed::<_>(),
+                lexicon: mem::zeroed::<_>(),
+                rule_fsts: mem::zeroed::<_>(),
+            }
+        };
         // Recognizer config
         let recognizer_config = unsafe {
             sherpa_rs_sys::SherpaOnnxOnlineRecognizerConfig {
                 model_config,
                 decoding_method: decoding_method_ptr.as_ptr(),
                 // NULLs
-                feat_config: mem::zeroed::<_>(),
-                max_active_paths: mem::zeroed::<_>(),
-                enable_endpoint: mem::zeroed::<_>(),
-                rule1_min_trailing_silence: mem::zeroed::<_>(),
-                rule2_min_trailing_silence: mem::zeroed::<_>(),
-                rule3_min_utterance_length: mem::zeroed::<_>(),
-                blank_penalty: mem::zeroed::<_>(),
+                feat_config: feat_config,
+                max_active_paths: 4,
+                enable_endpoint: 1,
+                rule1_min_trailing_silence: 2.4,
+                rule2_min_trailing_silence: 1.2,
+                rule3_min_utterance_length: 20.0,
+                blank_penalty: 0.0,
                 hotwords_file: mem::zeroed::<_>(),
-                hotwords_score: mem::zeroed::<_>(),
-                ctc_fst_decoder_config: mem::zeroed::<_>(),
+                hotwords_score: 1.5,
+                ctc_fst_decoder_config: ctc_decode,
                 rule_fars: mem::zeroed::<_>(),
                 rule_fsts: mem::zeroed::<_>(),
                 hotwords_buf: mem::zeroed::<_>(),
-                hotwords_buf_size: mem::zeroed::<_>(),
-                hr: mem::zeroed::<_>(),
+                hotwords_buf_size: 10,
+                hr: hr,
             }
         };
 
@@ -88,16 +120,13 @@ impl ZipFormerStream {
                 samples.as_ptr(),
                 samples.len().try_into().unwrap(),
             );
-            while sherpa_rs_sys::SherpaOnnxIsOnlineStreamReady(self.recognizer, self.stream) > 0 {
+            while sherpa_rs_sys::SherpaOnnxIsOnlineStreamReady(self.recognizer, self.stream) == 1 {
                 sherpa_rs_sys::SherpaOnnxDecodeOnlineStream(self.recognizer, self.stream);
             }
 
             let result_ptr =
                 sherpa_rs_sys::SherpaOnnxGetOnlineStreamResult(self.recognizer, self.stream);
-            // let raw_result = result_ptr.read();
-            // let text = cstr_to_string(raw_result.text as _);
-            // // Free
-            // sherpa_rs_sys::SherpaOnnxDestroyOfflineRecognizerResult(result_ptr);
+
             let text = if !result_ptr.is_null() {
                 let raw_result = result_ptr.read();
                 let text = cstr_to_string(raw_result.text as _);
@@ -106,6 +135,10 @@ impl ZipFormerStream {
             } else {
                 String::new()
             };
+
+            if sherpa_rs_sys::SherpaOnnxOnlineStreamIsEndpoint(self.recognizer, self.stream) == 1 {
+                sherpa_rs_sys::SherpaOnnxOnlineStreamReset(self.recognizer,self.stream);
+            }
             text
         }
     }
