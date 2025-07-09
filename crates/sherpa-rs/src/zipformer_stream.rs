@@ -4,7 +4,16 @@ use crate::{
     zipformer::ZipFormerConfig,
 };
 use eyre::{bail, Result};
-use std::mem;
+use serde::{Deserialize, Serialize};
+use std::{ffi::CStr, mem};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct OnlineRecognizerResult {
+    pub text: String,
+    pub tokens: Vec<String>,
+    pub timestamps: Vec<f64>,
+    pub segment: u64,
+}
 
 pub struct ZipFormerStream {
     recognizer: *const sherpa_rs_sys::SherpaOnnxOnlineRecognizer,
@@ -57,14 +66,14 @@ impl ZipFormerStream {
         };
 
         let feat_config = sherpa_rs_sys::SherpaOnnxFeatureConfig {
-                sample_rate: 16000,
-                feature_dim: 80,
-            };
+            sample_rate: 16000,
+            feature_dim: 80,
+        };
 
-        let ctc_decode = unsafe { 
+        let ctc_decode = unsafe {
             sherpa_rs_sys::SherpaOnnxOnlineCtcFstDecoderConfig {
                 graph: mem::zeroed::<_>(),
-                max_active:3000,
+                max_active: 3000,
             }
         };
 
@@ -112,7 +121,7 @@ impl ZipFormerStream {
         Ok(Self { recognizer, stream })
     }
 
-    pub fn decode(&mut self, sample_rate: u32, samples: Vec<f32>) -> String {
+    pub fn decode(&mut self, sample_rate: u32, samples: Vec<f32>) -> OnlineRecognizerResult {
         unsafe {
             sherpa_rs_sys::SherpaOnnxOnlineStreamAcceptWaveform(
                 self.stream,
@@ -125,19 +134,26 @@ impl ZipFormerStream {
             }
 
             let result_ptr =
-                sherpa_rs_sys::SherpaOnnxGetOnlineStreamResult(self.recognizer, self.stream);
+                sherpa_rs_sys::SherpaOnnxGetOnlineStreamResultAsJson(self.recognizer, self.stream);
 
             let text = if !result_ptr.is_null() {
-                let raw_result = result_ptr.read();
-                let text = cstr_to_string(raw_result.text as _);
-                sherpa_rs_sys::SherpaOnnxDestroyOnlineRecognizerResult(result_ptr);
-                text
+                // let raw_result = result_ptr.read();
+                let json_string = CStr::from_ptr(result_ptr)
+                    .to_string_lossy() // allows malformed UTF-8 (like Dart's `allowMalformed`)
+                    .into_owned();
+                let json_result = serde_json::from_str::<OnlineRecognizerResult>(&json_string).ok();
+                sherpa_rs_sys::SherpaOnnxDestroyOnlineStreamResultJson(result_ptr);
+                if json_result.is_some() {
+                    json_result.unwrap()
+                } else {
+                    OnlineRecognizerResult::default()
+                }
             } else {
-                String::new()
+                OnlineRecognizerResult::default()
             };
 
             if sherpa_rs_sys::SherpaOnnxOnlineStreamIsEndpoint(self.recognizer, self.stream) == 1 {
-                sherpa_rs_sys::SherpaOnnxOnlineStreamReset(self.recognizer,self.stream);
+                sherpa_rs_sys::SherpaOnnxOnlineStreamReset(self.recognizer, self.stream);
             }
             text
         }
