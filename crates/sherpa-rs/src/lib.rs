@@ -14,6 +14,7 @@ pub mod vad;
 pub mod whisper;
 pub mod zipformer;
 pub mod zipformer_stream;
+pub mod paraformer_stream;
 
 mod utils;
 
