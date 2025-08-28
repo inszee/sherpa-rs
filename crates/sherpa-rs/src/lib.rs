@@ -22,13 +22,13 @@ mod utils;
 pub mod tts;
 
 use std::ffi::CStr;
-
 #[cfg(feature = "sys")]
 pub use sherpa_rs_sys;
 
 use eyre::{bail, Result};
 use utils::cstr_to_string;
 
+use hound::SampleFormat;
 pub fn get_default_provider() -> String {
     "cpu".into()
     // Other providers has many issues with different models!!
@@ -46,18 +46,38 @@ pub fn get_default_provider() -> String {
 
 pub fn read_audio_file(path: &str) -> Result<(Vec<f32>, u32)> {
     let mut reader = hound::WavReader::open(path)?;
-    let sample_rate = reader.spec().sample_rate;
+    let spec = reader.spec();
+    let sample_rate = spec.sample_rate;
 
-    // Check if the sample rate is 16000
     if sample_rate != 16000 {
         bail!("The sample rate must be 16000.");
     }
 
-    // Collect samples into a Vec<f32>
-    let samples: Vec<f32> = reader
-        .samples::<i16>()
-        .map(|s| (s.unwrap() as f32) / (i16::MAX as f32))
-        .collect();
+    // ✅ Fix: Use a match statement to read and convert samples based on their actual format.
+    let samples: Vec<f32> = match spec.sample_format {
+        SampleFormat::Int => {
+            match spec.bits_per_sample {
+                16 => reader
+                    .samples::<i16>()
+                    .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+                    .collect(),
+                32 => reader
+                    .samples::<i32>()
+                    .map(|s| s.unwrap() as f32 / i32::MAX as f32)
+                    .collect(),
+                _ => bail!("Unsupported integer bit depth."),
+            }
+        },
+        SampleFormat::Float => {
+            reader
+                .samples::<f32>()
+                .map(|s| s.unwrap())
+                .collect()
+        },
+    };
+
+    // Note: This code currently handles mono files. For stereo, you would
+    // need to adjust the logic to average the channels into a single mono vector.
 
     Ok((samples, sample_rate))
 }
